@@ -3,16 +3,19 @@ pub mod ore;
 pub mod hmm;
 pub mod ws_server;
 pub mod log_macros;
+pub mod rpc;
+pub mod utils;
 
-use std::{collections::VecDeque, env, net::SocketAddr, sync::Arc, time::Duration};
+use std::{collections::VecDeque, env, net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 use colored::{Colorize, CustomColor};
 use ore_api::state::{Board, Round};
 use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::commitment_config::{CommitmentConfig, CommitmentLevel};
 use steel::{AccountDeserialize, Pubkey};
 use tokio::sync::{RwLock, broadcast};
+use clap::Parser;
 
-use crate::{hmm::{HMM, PoVAI, online_update_emission, predict_next_from_hmm, top_k_from_probs, train_hmm}, orb::{board_pda_orb, round_pda_orb}, ore::{board_pda_ore, round_pda_ore}, ws_server::{PoVAISnapShot, ServerSnapshot, WsServerHandle, build_router}};
+use crate::{hmm::{HMM, PoVAI, online_update_emission, predict_next_from_hmm, top_k_from_probs, train_hmm}, orb::{board_pda_orb, round_pda_orb}, ore::{board_pda_ore, round_pda_ore}, rpc::{DeployOutcome, try_checkpoint_and_deploy_orb, try_checkpoint_and_deploy_ore, try_claim_sol_orb, try_claim_sol_ore}, utils::read_filenames, ws_server::{PoVAISnapShot, ServerSnapshot, WsServerHandle, build_router}};
 
 const WINDOW: usize = 50usize;
 const N_STATES: usize = 8usize;
@@ -30,9 +33,20 @@ pub fn orb_log() -> colored::ColoredString {
     ORB_LOG.custom_color(CustomColor { r: 51, g: 89, b: 246 })
 }
 
+#[derive(Parser, Debug)]
+struct Args {
+    #[arg(long)]
+    paths: PathBuf,
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().expect("Failed to load env");
+
+    let args = Args::parse();
+
+    let files = read_filenames(&args.paths);
+    info_log!("Loaded {} miners", files.len());
 
     let (tx, _rx) = broadcast::channel::<String>(200);
     let snapshot: Arc<RwLock<Option<ws_server::ServerSnapshot>>> =
@@ -191,7 +205,7 @@ async fn main() -> anyhow::Result<()> {
     let ws_clone = ws_handle.clone();
 
     tokio::spawn(async move {
-        update_loop(conn_clone, ore_ai, orb_ai, msg_clone, ws_clone).await;
+        update_loop(conn_clone, ore_ai, orb_ai, msg_clone, ws_clone, files).await;
     });
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
@@ -206,7 +220,7 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn update_loop(connection: Arc<RpcClient>, mut ore_ai: PoVAI, mut orb_ai: PoVAI, msg: Arc<RwLock<ServerSnapshot>>, handle: WsServerHandle) {
+async fn update_loop(connection: Arc<RpcClient>, mut ore_ai: PoVAI, mut orb_ai: PoVAI, msg: Arc<RwLock<ServerSnapshot>>, handle: WsServerHandle, files: Vec<String>) {
 // async fn update() {
     info_log!("Running...");
 
@@ -282,6 +296,21 @@ async fn update_loop(connection: Arc<RpcClient>, mut ore_ai: PoVAI, mut orb_ai: 
         let mut maybe_orb_handle: Option<tokio::task::JoinHandle<anyhow::Result<Round>>> = None;
 
         if Some(board_ore.round_id) != last_round_ore {
+            for file in &files {
+                match try_claim_sol_ore(&connection, file).await {
+                    Ok(DeployOutcome::Deployed(sig)) => {
+                        info_log!("{} Claim submitted: {}", ore_log(), sig);
+                    }
+                    Ok(DeployOutcome::Skipped) => {
+                        warn_log!("{} Skipped claim attempt for round {} - will retry next loop", ore_log(), board_ore.round_id);
+                        continue;
+                    }
+                    Err(e) => {
+                        error_log!("{} Unexpected error in checkpoint/deploy flow: {:?}", ore_log(), e);
+                        continue;
+                    }
+                }
+            }
             last_round_ore = Some(board_ore.round_id);
             info_log!("{} Round {}", ore_log(), board_ore.round_id);
             // prepare preds
@@ -312,6 +341,26 @@ async fn update_loop(connection: Arc<RpcClient>, mut ore_ai: PoVAI, mut orb_ai: 
                     info_log!("Sent predictions via WS: {:?}", msg);
                 }
             }
+
+            let preds = ore_ai.preds.clone();
+
+            let amount = if ore_ai.lose > 1 { 10_000 * 10u64.pow(ore_ai.lose) } else { 10_000 };
+            for file in &files {
+                match try_checkpoint_and_deploy_ore(&connection, board_ore.round_id, amount, &preds, file).await {
+                    Ok(DeployOutcome::Deployed(sig)) => {
+                        last_round_ore = Some(board_ore.round_id);
+                        info_log!("{} Deployed for round {} sig {}", ore_log(), board_ore.round_id, sig);
+                    }
+                    Ok(DeployOutcome::Skipped) => {
+                        error_log!("{} Skipped deploy attempt for round {} (path {}) - will retry next loop", ore_log(), board_ore.round_id, file);
+                        continue;
+                    }
+                    Err(e) => {
+                        error_log!("{} Unexpected error in checkpoint/deploy flow (path {}): {:?}", ore_log(), file, e);
+                        continue;
+                    }
+                }
+            }
         
             // spawn one-shot waiter for ORE round
             let conn = Arc::clone(&connection);
@@ -322,6 +371,21 @@ async fn update_loop(connection: Arc<RpcClient>, mut ore_ai: PoVAI, mut orb_ai: 
         }
         
         if Some(board_orb.round_id) != last_round_orb {
+            for file in &files {
+                match try_claim_sol_orb(&connection, file).await {
+                    Ok(DeployOutcome::Deployed(sig)) => {
+                        info_log!("{} Claim submitted: {}", orb_log(), sig);
+                    }
+                    Ok(DeployOutcome::Skipped) => {
+                        warn_log!("{} Skipped claim attempt for round {} - will retry next loop", orb_log(), board_orb.round_id);
+                        continue;
+                    }
+                    Err(e) => {
+                        error_log!("{} Unexpected error in checkpoint/deploy flow: {:?}", orb_log(), e);
+                        continue;
+                    }
+                }
+            }
             last_round_orb = Some(board_orb.round_id);
             info_log!("{} Round {}", orb_log(), board_orb.round_id);
             let last_window: Vec<usize> = orb_ai.buffer.iter().cloned().collect();
@@ -349,6 +413,26 @@ async fn update_loop(connection: Arc<RpcClient>, mut ore_ai: PoVAI, mut orb_ai: 
                 if let Ok(json) = serde_json::to_string(&*snapshot) {
                     let _ = handle.tx.send(json);  // broadcast ke semua client
                     info_log!("Sent predictions via WS: {:?}", msg);
+                }
+            }
+
+            let preds = orb_ai.preds.clone();
+
+            let amount = if orb_ai.lose > 1 { 10_000 * 10u64.pow(orb_ai.lose) } else { 10_000 };
+            for file in &files {
+                match try_checkpoint_and_deploy_orb(&connection, board_orb.round_id, amount, &preds, file).await {
+                    Ok(DeployOutcome::Deployed(sig)) => {
+                        last_round_orb = Some(board_orb.round_id);
+                        info_log!("{} Deployed for round {} sig {}", orb_log(), board_orb.round_id, sig);
+                    }
+                    Ok(DeployOutcome::Skipped) => {
+                        error_log!("{} Skipped deploy attempt for round {} (path {}) - will retry next loop", orb_log(), board_orb.round_id, file);
+                        continue;
+                    }
+                    Err(e) => {
+                        error_log!("{} Unexpected error in checkpoint/deploy flow (path {}): {:?}", orb_log(), file, e);
+                        continue;
+                    }
                 }
             }
         

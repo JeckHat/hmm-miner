@@ -1,4 +1,4 @@
-use ore_api::{prelude::{Checkpoint, Deploy}, state::{automation_pda, board_pda, miner_pda, round_pda, treasury_pda}};
+use ore_api::{prelude::{Checkpoint, ClaimSOL, Deploy}, state::{automation_pda, board_pda, miner_pda, round_pda, treasury_pda}};
 use steel::{AccountMeta, Instruction, Pubkey};
 
 pub fn round_pda_ore(id: u64) -> (Pubkey, u8) {
@@ -57,7 +57,7 @@ pub fn deploy_ore(
     }
 }
 
-pub fn checkpoint_orb(signer: Pubkey, authority: Pubkey, round_id: u64) -> Instruction {
+pub fn checkpoint_ore(signer: Pubkey, authority: Pubkey, round_id: u64) -> Instruction {
     let miner_address = miner_pda_ore(authority).0;
     let board_address = board_pda_ore().0;
     let round_address = round_pda_ore(round_id).0;
@@ -73,5 +73,18 @@ pub fn checkpoint_orb(signer: Pubkey, authority: Pubkey, round_id: u64) -> Instr
             AccountMeta::new_readonly(Pubkey::from_str_const("11111111111111111111111111111111"), false),
         ],
         data: Checkpoint {}.to_bytes(),
+    }
+}
+
+pub fn claim_sol_ore(signer: Pubkey) -> Instruction {
+    let miner_address = miner_pda_ore(signer).0;
+    Instruction {
+        program_id: ore_api::id(),
+        accounts: vec![
+            AccountMeta::new(signer, true),
+            AccountMeta::new(miner_address, false),
+            AccountMeta::new_readonly(Pubkey::from_str_const("11111111111111111111111111111111"), false),
+        ],
+        data: ClaimSOL {}.to_bytes(),
     }
 }

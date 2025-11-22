@@ -1,5 +1,5 @@
 use const_crypto::ed25519;
-use ore_api::{consts::{AUTOMATION, BOARD, MINER, ROUND, TREASURY}, prelude::{Checkpoint, Deploy}};
+use ore_api::{consts::{AUTOMATION, BOARD, MINER, ROUND, TREASURY}, prelude::{Checkpoint, ClaimSOL, Deploy}};
 use steel::{AccountMeta, Instruction, Pubkey};
 
 pub const PROGRAM_ID: Pubkey = Pubkey::from_str_const("boreXQWsKpsJz5RR9BMtN8Vk4ndAk23sutj8spWYhwk");
@@ -84,5 +84,18 @@ pub fn checkpoint_orb(signer: Pubkey, authority: Pubkey, round_id: u64) -> Instr
             AccountMeta::new_readonly(Pubkey::from_str_const("11111111111111111111111111111111"), false),
         ],
         data: Checkpoint {}.to_bytes(),
+    }
+}
+
+pub fn claim_sol_orb(signer: Pubkey) -> Instruction {
+    let miner_address = miner_pda_orb(signer).0;
+    Instruction {
+        program_id: PROGRAM_ID,
+        accounts: vec![
+            AccountMeta::new(signer, true),
+            AccountMeta::new(miner_address, false),
+            AccountMeta::new_readonly(Pubkey::from_str_const("11111111111111111111111111111111"), false),
+        ],
+        data: ClaimSOL {}.to_bytes(),
     }
 }

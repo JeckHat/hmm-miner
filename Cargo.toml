@@ -18,3 +18,4 @@ rand = "0.8"
 axum = { version = "0.8.4", features = ["ws"] }
 futures = "0.3"
 colored = "3.0.0"
+clap = { version = "4", features = ["derive"] }
