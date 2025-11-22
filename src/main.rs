@@ -21,6 +21,7 @@ const WINDOW: usize = 50usize;
 const N_STATES: usize = 8usize;
 const N_ITER: usize = 50usize;
 const RETRAIN_EVERY: usize = 3usize;
+const TOP_K: usize = 18usize;
 
 pub const ORE_LOG: &str = "[ORE]";
 pub const ORB_LOG: &str = "[ORB]";
@@ -316,7 +317,7 @@ async fn update_loop(connection: Arc<RpcClient>, mut ore_ai: PoVAI, mut orb_ai: 
             // prepare preds
             let last_window: Vec<usize> = ore_ai.buffer.iter().cloned().collect();
             let probs = predict_next_from_hmm(&ore_ai.hmm_model, &last_window);
-            ore_ai.preds = top_k_from_probs(&probs, 20).into_iter().map(|(i, _)| i).collect();
+            ore_ai.preds = top_k_from_probs(&probs, TOP_K).into_iter().map(|(i, _)| i).collect();
 
             let preds = ore_ai.preds.clone();
 
@@ -390,7 +391,7 @@ async fn update_loop(connection: Arc<RpcClient>, mut ore_ai: PoVAI, mut orb_ai: 
             info_log!("{} Round {}", orb_log(), board_orb.round_id);
             let last_window: Vec<usize> = orb_ai.buffer.iter().cloned().collect();
             let probs = predict_next_from_hmm(&orb_ai.hmm_model, &last_window);
-            orb_ai.preds = top_k_from_probs(&probs, 20).into_iter().map(|(i, _)| i).collect();
+            orb_ai.preds = top_k_from_probs(&probs, TOP_K).into_iter().map(|(i, _)| i).collect();
 
             let preds = orb_ai.preds.clone();
 
