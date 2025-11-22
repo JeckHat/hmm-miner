@@ -1,0 +1,20 @@
+[package]
+name = "hmm-miner"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tokio = { version = "1.47.1", features = ["full"] }
+anyhow = "1.0.99"
+const-crypto = "0.3.0"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.145"
+dotenvy = "0.15.7"
+steel = "4.0.2"
+ore-api = "3.7.1"
+solana-client = "^2.1"
+solana-sdk = "^2.1"
+rand = "0.8"
+axum = { version = "0.8.4", features = ["ws"] }
+futures = "0.3"
+colored = "3.0.0"
