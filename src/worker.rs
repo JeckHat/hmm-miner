@@ -837,7 +837,7 @@ async fn update_loop_single(connection: Arc<RpcClient>, type_rng: usize, mut pov
             
             let conn = Arc::clone(&connection);
             
-            let round_key = if type_rng == 0 { round_pda_ore(board.round_id).0 } else { round_pda_ore(board.round_id).0 };
+            let round_key = if type_rng == 0 { round_pda_ore(board.round_id).0 } else { round_pda_orb(board.round_id).0 };
             maybe_handle = Some(tokio::spawn(async move {
                 wait_for_round_rng(conn, round_key, if type_rng == 0 { ore_log() } else { orb_log() }).await
             }));
@@ -930,14 +930,14 @@ async fn update_loop_single(connection: Arc<RpcClient>, type_rng: usize, mut pov
                         if pov_ai.rounds_since_retrain >= RETRAIN_EVERY {
                             pov_ai.rounds_since_retrain = 0;
                             let train_seq = if pov_ai.history.len() > WINDOW { &pov_ai.history[pov_ai.history.len()-WINDOW..] } else { &pov_ai.history[..] };
-                            info_log!("{} Retraining HMM on {} obs...", ore_log(), train_seq.len());
+                            info_log!("{} Retraining HMM on {} obs...", rng_log, train_seq.len());
                             pov_ai.hmm_model = train_hmm(train_seq, N_STATES, N_ITER);
-                            info_log!("{} Retrain done.", ore_log());
+                            info_log!("{} Retrain done.", rng_log);
                         }
                     }
                 }
-                Ok(Err(e)) => warn_log!("{} waiter failed: {:?}", ore_log(), e),
-                Err(join_err) => warn_log!("{} waiter task panicked/cancelled: {:?}", ore_log(), join_err),
+                Ok(Err(e)) => warn_log!("{} waiter failed: {:?}", rng_log, e),
+                Err(join_err) => warn_log!("{} waiter task panicked/cancelled: {:?}", rng_log, join_err),
             }
         }
     }
