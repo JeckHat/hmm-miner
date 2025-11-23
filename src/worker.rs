@@ -12,6 +12,7 @@ const N_STATES: usize = 8usize;
 const N_ITER: usize = 50usize;
 const RETRAIN_EVERY: usize = 3usize;
 const TOP_K: usize = 18usize;
+const LIMIT: usize = 50usize;
 
 pub const ORE_LOG: &str = "[ORE]";
 pub const ORB_LOG: &str = "[ORB]";
@@ -710,6 +711,42 @@ async fn update_loop_single(connection: Arc<RpcClient>, type_rng: usize, mut pov
             continue;
         };
 
+        if type_rng == 0 {
+            {
+                let mut snapshot = msg.write().await;
+                snapshot.r#type = "snapshot";
+                snapshot.rng_type = "ore".to_string();
+                snapshot.ore_snapshot.round = board.round_id as usize;
+                snapshot.ore_snapshot.total_round = if pov_ai.total == 0 { 1 } else { pov_ai.total };
+                snapshot.ore_snapshot.total_win = pov_ai.total_hit;
+                snapshot.ore_snapshot.win = pov_ai.win as usize;
+                snapshot.ore_snapshot.lose = pov_ai.lose as usize;
+                snapshot.ore_snapshot.win_in_row = pov_ai.win_in_row as usize;
+                snapshot.ore_snapshot.lose_in_row = pov_ai.lose_in_row as usize;
+            }
+        } else {
+            {
+                let mut snapshot = msg.write().await;
+                snapshot.r#type = "snapshot";
+                snapshot.rng_type = "orb".to_string();
+                snapshot.orb_snapshot.round = board.round_id as usize;
+                snapshot.orb_snapshot.total_round = if pov_ai.total == 0 { 1 } else { pov_ai.total };
+                snapshot.orb_snapshot.total_win = pov_ai.total_hit;
+                snapshot.orb_snapshot.win = pov_ai.win as usize;
+                snapshot.orb_snapshot.lose = pov_ai.lose as usize;
+                snapshot.orb_snapshot.win_in_row = pov_ai.win_in_row as usize;
+                snapshot.orb_snapshot.lose_in_row = pov_ai.lose_in_row as usize;
+            }
+        }
+                
+        {
+            let snapshot = msg.read().await;
+            if let Ok(json) = serde_json::to_string(&*snapshot) {
+                let _ = handle.tx.send(json);  // broadcast ke semua client
+                info_log!("Sent predictions via WS: {:?}", msg);
+            }
+        }
+
         let mut maybe_handle: Option<tokio::task::JoinHandle<anyhow::Result<Round>>> = None;
     
         if Some(board.round_id) != last_round {
@@ -796,8 +833,8 @@ async fn update_loop_single(connection: Arc<RpcClient>, type_rng: usize, mut pov
     
             let preds = pov_ai.preds.clone();
 
-            let amount = 10_000 * 10u64.pow(pov_ai.lose);
-            if pov_ai.total < 50 || pov_ai.lose > 0 {
+            let amount = if pov_ai.lose > 1 { 10_000 * 10u64.pow(pov_ai.lose) } else { 10_000 };
+            if pov_ai.total < LIMIT || pov_ai.lose > 0 {
                 if type_rng == 0 {
                     for file in &files {
                         match try_checkpoint_and_deploy_ore(&connection, board.round_id, amount, &preds, file).await {
