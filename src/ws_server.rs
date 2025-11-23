@@ -15,7 +15,7 @@ use crate::{info_log, warn_log};
 #[derive(Debug, Clone, Serialize)]
 pub struct ServerSnapshot {
     pub r#type: &'static str,
-    pub status: String,
+    pub rng_type: String,
     pub ore_snapshot: PoVAISnapShot,
     pub orb_snapshot: PoVAISnapShot
 }
@@ -33,6 +33,39 @@ pub struct PoVAISnapShot {
     pub win_in_row: usize,
     pub lose_in_row: usize,
     pub winning_square: usize
+}
+
+impl PoVAISnapShot {
+    pub fn new() -> Self {
+        Self {
+            type_rng: 1,
+            status: "init".to_string(),
+            round: 0,
+            preds: Vec::new(),
+            total_round: 1,
+            total_win: 0,
+            win: 0,
+            lose: 0,
+            win_in_row: 0,
+            lose_in_row: 0,
+            winning_square: 0
+        }
+    }
+    pub fn init(type_rng: usize) -> Self {
+        Self {
+            type_rng: type_rng,
+            status: "init".to_string(),
+            round: 0,
+            preds: Vec::new(),
+            total_round: 1,
+            total_win: 0,
+            win: 0,
+            lose: 0,
+            win_in_row: 0,
+            lose_in_row: 0,
+            winning_square: 0
+        }
+    }
 }
 
 #[derive(Clone)]

@@ -21,6 +21,41 @@ pub struct PoVAI {
     pub rounds_since_retrain: usize,
 }
 
+impl PoVAI {
+    pub fn new() -> Self {
+        Self {
+            type_rng: 0,
+            preds: Vec::new(),
+            total: 0,
+            total_hit: 0,
+            history: Vec::new(),
+            buffer: VecDeque::<usize>::new(),
+            lose: 0,
+            lose_in_row: 0,
+            win: 0,
+            win_in_row: 0,
+            hmm_model: HMM::init(),
+            rounds_since_retrain: 0usize
+        }
+    }
+    pub fn init() -> Self {
+        Self {
+            type_rng: 0,
+            preds: Vec::new(),
+            total: 0,
+            total_hit: 0,
+            history: Vec::new(),
+            buffer: VecDeque::<usize>::new(),
+            lose: 0,
+            lose_in_row: 0,
+            win: 0,
+            win_in_row: 0,
+            hmm_model: HMM::init(),
+            rounds_since_retrain: 0usize
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct HMM {
     pub n_states: usize,
