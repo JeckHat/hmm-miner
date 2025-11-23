@@ -636,10 +636,6 @@ pub async fn run_single(files: Vec<String>, type_rng: usize) -> anyhow::Result<(
 
     for i in latest_round.saturating_sub(50)..=latest_round + 2 {
         let round_key = if type_rng == 0 { &round_pda_ore(i).0 } else { &round_pda_orb(i).0 };
-        
-        let round_data = connection.get_account_data(&round_key).await?;
-        let round = Round::try_from_bytes(&round_data)?;
-
         match connection.get_account_data(&round_key).await {
             Ok(data) => {
                 match Round::try_from_bytes(&data) {
@@ -660,14 +656,6 @@ pub async fn run_single(files: Vec<String>, type_rng: usize) -> anyhow::Result<(
             Err(err) => {
                 error_log!("{} Round account not found", rng_log);
             }
-        }
-
-        if let Some(rng) = round.rng() {
-            let winning_square = round.winning_square(rng) as usize;
-            info_log!("{} Round: {} | Total_deployed: {} | Time: {} | Square: {}\n",
-                rng_log, i, round.total_deployed, round.expires_at, winning_square
-            );
-            pov_ai.history.push(winning_square);
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
