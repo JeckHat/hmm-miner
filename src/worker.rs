@@ -787,37 +787,39 @@ async fn update_loop_single(connection: Arc<RpcClient>, type_rng: usize, mut pov
             let preds = pov_ai.preds.clone();
 
             let amount = 10_000 * 10u64.pow(pov_ai.lose);
-            if type_rng == 0 {
-                for file in &files {
-                    match try_checkpoint_and_deploy_ore(&connection, board.round_id, amount, &preds, file).await {
-                        Ok(DeployOutcome::Deployed(sig)) => {
-                            last_round = Some(board.round_id);
-                            info_log!("{} Deployed for round {} sig {}", rng_log, board.round_id, sig);
-                        }
-                        Ok(DeployOutcome::Skipped) => {
-                            error_log!("{} Skipped deploy attempt for round {} (path {}) - will retry next loop", rng_log, board.round_id, file);
-                            continue;
-                        }
-                        Err(e) => {
-                            error_log!("{} Unexpected error in checkpoint/deploy flow (path {}): {:?}", rng_log, file, e);
-                            continue;
+            if pov_ai.total < 50 || pov_ai.lose > 0 {
+                if type_rng == 0 {
+                    for file in &files {
+                        match try_checkpoint_and_deploy_ore(&connection, board.round_id, amount, &preds, file).await {
+                            Ok(DeployOutcome::Deployed(sig)) => {
+                                last_round = Some(board.round_id);
+                                info_log!("{} Deployed for round {} sig {}", rng_log, board.round_id, sig);
+                            }
+                            Ok(DeployOutcome::Skipped) => {
+                                error_log!("{} Skipped deploy attempt for round {} (path {}) - will retry next loop", rng_log, board.round_id, file);
+                                continue;
+                            }
+                            Err(e) => {
+                                error_log!("{} Unexpected error in checkpoint/deploy flow (path {}): {:?}", rng_log, file, e);
+                                continue;
+                            }
                         }
                     }
-                }
-            } else {
-                for file in &files {
-                    match try_checkpoint_and_deploy_orb(&connection, board.round_id, amount, &preds, file).await {
-                        Ok(DeployOutcome::Deployed(sig)) => {
-                            last_round = Some(board.round_id);
-                            info_log!("{} Deployed for round {} sig {}", rng_log, board.round_id, sig);
-                        }
-                        Ok(DeployOutcome::Skipped) => {
-                            error_log!("{} Skipped deploy attempt for round {} (path {}) - will retry next loop", rng_log, board.round_id, file);
-                            continue;
-                        }
-                        Err(e) => {
-                            error_log!("{} Unexpected error in checkpoint/deploy flow (path {}): {:?}", rng_log, file, e);
-                            continue;
+                } else {
+                    for file in &files {
+                        match try_checkpoint_and_deploy_orb(&connection, board.round_id, amount, &preds, file).await {
+                            Ok(DeployOutcome::Deployed(sig)) => {
+                                last_round = Some(board.round_id);
+                                info_log!("{} Deployed for round {} sig {}", rng_log, board.round_id, sig);
+                            }
+                            Ok(DeployOutcome::Skipped) => {
+                                error_log!("{} Skipped deploy attempt for round {} (path {}) - will retry next loop", rng_log, board.round_id, file);
+                                continue;
+                            }
+                            Err(e) => {
+                                error_log!("{} Unexpected error in checkpoint/deploy flow (path {}): {:?}", rng_log, file, e);
+                                continue;
+                            }
                         }
                     }
                 }
