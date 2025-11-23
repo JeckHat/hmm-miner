@@ -668,7 +668,7 @@ pub async fn run_single(files: Vec<String>, type_rng: usize) -> anyhow::Result<(
         update_loop_single(conn_clone, type_rng, pov_ai, msg_clone, ws_clone, files).await;
     });
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], if type_rng == 0 { 3000 } else { 3001 } ));
+    let addr = SocketAddr::from(([127, 0, 0, 1], if type_rng == 0 { 3000 } else { 3105 } ));
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await?;
