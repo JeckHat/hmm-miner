@@ -640,6 +640,28 @@ pub async fn run_single(files: Vec<String>, type_rng: usize) -> anyhow::Result<(
         let round_data = connection.get_account_data(&round_key).await?;
         let round = Round::try_from_bytes(&round_data)?;
 
+        match connection.get_account_data(&round_key).await {
+            Ok(data) => {
+                match Round::try_from_bytes(&data) {
+                    Ok(round) => {
+                        if let Some(rng) = round.rng() {
+                            let winning_square = round.winning_square(rng) as usize;
+                            info_log!("{} Round: {} | Total_deployed: {} | Time: {} | Square: {}\n",
+                                rng_log, i, round.total_deployed, round.expires_at, winning_square
+                            );
+                            pov_ai.history.push(winning_square);
+                        }
+                    },
+                    Err(e) => {
+                        error_log!("{} Round account not found", rng_log);
+                    }
+                }
+            }
+            Err(err) => {
+                error_log!("{} Round account not found", rng_log);
+            }
+        }
+
         if let Some(rng) = round.rng() {
             let winning_square = round.winning_square(rng) as usize;
             info_log!("{} Round: {} | Total_deployed: {} | Time: {} | Square: {}\n",
