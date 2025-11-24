@@ -364,7 +364,9 @@ async fn update_loop(connection: Arc<RpcClient>, mut ore_ai: PoVAI, mut orb_ai: 
 
             let preds = orb_ai.preds.clone();
 
-            let amount = if orb_ai.lose > 1 { 10_000 * 10u64.pow(orb_ai.lose) } else { 10_000 };
+            // let amount = if orb_ai.lose > 1 { 10_000 * 10u64.pow(orb_ai.lose - 1) } else { 10_000 };
+            let amount = 10_000 * 10u64.pow(orb_ai.lose);
+            // let amount = if pov_ai.lose >= 3 { 1_000_000 } else { 10_000 * 10u64.pow(orb_ai.lose) };
             for file in &files {
                 match try_checkpoint_and_deploy_orb(&connection, board_orb.round_id, amount, &preds, file).await {
                     Ok(DeployOutcome::Deployed(sig)) => {
