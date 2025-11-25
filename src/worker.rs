@@ -1,18 +1,18 @@
-use std::{collections::VecDeque, env, net::SocketAddr, sync::Arc, time::Duration};
+use std::{collections::{HashMap, VecDeque}, env, net::SocketAddr, sync::Arc, time::Duration};
 use ore_api::state::{Board, Round};
 use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::commitment_config::{CommitmentConfig, CommitmentLevel};
 use steel::{AccountDeserialize, Pubkey};
 use tokio::sync::{RwLock, broadcast};
 
-use crate::{error_log, hmm::{HMM, PoVAI, online_update_emission, predict_next_from_hmm, top_k_from_probs, train_hmm}, info_log, orb::{self, board_pda_orb, round_pda_orb}, orb_log, ore::{board_pda_ore, round_pda_ore}, ore_log, rpc::{DeployOutcome, try_checkpoint_and_deploy_orb, try_checkpoint_and_deploy_ore, try_claim_sol_orb, try_claim_sol_ore}, warn_log, ws_server::{self, PoVAISnapShot, ServerSnapshot, WsServerHandle, build_router}};
+use crate::{error_log, hmm::{HMM, PoVAI, online_update_emission, predict_next_from_hmm, top_k_from_probs, train_hmm}, info_log, orb::{self, board_pda_orb, round_pda_orb}, orb_log, ore::{board_pda_ore, round_pda_ore}, ore_log, rpc::{DeployOutcome, try_checkpoint_and_deploy_orb, try_checkpoint_and_deploy_ore, try_claim_sol_orb, try_claim_sol_ore}, warn_log, ws_server::{self, LostInRowRound, PoVAISnapShot, ServerSnapshot, WsServerHandle, build_router}};
 
 const WINDOW: usize = 50usize;
 const N_STATES: usize = 8usize;
 const N_ITER: usize = 50usize;
 const RETRAIN_EVERY: usize = 3usize;
 const TOP_K: usize = 18usize;
-const LIMIT: usize = 50usize;
+const LIMIT: usize = 20usize;
 
 pub const ORE_LOG: &str = "[ORE]";
 pub const ORB_LOG: &str = "[ORB]";
@@ -307,12 +307,15 @@ async fn update_loop(connection: Arc<RpcClient>, mut ore_ai: PoVAI, mut orb_ai: 
                     }
                 }
             }
+
+            let msg_clone = msg.clone();
+            let handle_clone = handle.clone();
         
             // spawn one-shot waiter for ORE round
             let conn = Arc::clone(&connection);
             let round_key = round_pda_ore(board_ore.round_id).0;
             maybe_ore_handle = Some(tokio::spawn(async move {
-                wait_for_round_rng(conn, round_key, ore_log()).await
+                wait_for_round_rng(conn, round_key, msg_clone, ore_log(), handle_clone).await
             }));
         }
         
@@ -383,12 +386,15 @@ async fn update_loop(connection: Arc<RpcClient>, mut ore_ai: PoVAI, mut orb_ai: 
                     }
                 }
             }
+
+            let msg_clone = msg.clone();
+            let handle_clone = handle.clone();
         
             // spawn one-shot waiter for ORB round
             let conn = Arc::clone(&connection);
             let round_key = round_pda_orb(board_orb.round_id).0;
             maybe_orb_handle = Some(tokio::spawn(async move {
-                wait_for_round_rng(conn, round_key, orb_log()).await
+                wait_for_round_rng(conn, round_key, msg_clone, ore_log(), handle_clone).await
             }));
         }
         
@@ -563,7 +569,9 @@ async fn update_loop(connection: Arc<RpcClient>, mut ore_ai: PoVAI, mut orb_ai: 
 async fn wait_for_round_rng(
     connection: Arc<RpcClient>,
     round_key: Pubkey,
-    type_rng: colored::ColoredString
+    msg: Arc<RwLock<ServerSnapshot>>,
+    type_rng: colored::ColoredString,
+    handle: WsServerHandle
 ) -> anyhow::Result<Round> {
     loop {
         match connection.get_account_data(&round_key).await {
@@ -578,7 +586,29 @@ async fn wait_for_round_rng(
             _ => { /* nothing */ }
         }
 
-        tokio::time::sleep(Duration::from_secs(5 )).await;
+        if type_rng == ore_log() {
+            {
+                let mut snapshot = msg.write().await;
+                snapshot.r#type = "snapshot";
+                snapshot.rng_type = "ore".to_string();
+            }
+        } else {
+            {
+                let mut snapshot = msg.write().await;
+                snapshot.r#type = "snapshot";
+                snapshot.rng_type = "orb".to_string();
+            }
+        }
+                
+        {
+            let snapshot = msg.read().await;
+            if let Ok(json) = serde_json::to_string(&*snapshot) {
+                let _ = handle.tx.send(json);  // broadcast ke semua client
+                info_log!("Sent predictions via WS: {:?}", msg);
+            }
+        }
+
+        tokio::time::sleep(Duration::from_secs(5)).await;
     }
 }
 
@@ -693,6 +723,9 @@ async fn update_loop_single(connection: Arc<RpcClient>, type_rng: usize, mut pov
 
     pov_ai.hmm_model = train_hmm(&pov_ai.history, N_STATES, N_ITER);
     info_log!("{} Initial HMM trained on {} observations.", rng_log, &pov_ai.history.len());
+    
+    let mut list_lose_in_row: HashMap<u32, u32> = HashMap::new();
+    let mut trigger_lose = false;
 
     loop {
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -712,42 +745,6 @@ async fn update_loop_single(connection: Arc<RpcClient>, type_rng: usize, mut pov
             tokio::time::sleep(Duration::from_secs(2)).await;
             continue;
         };
-
-        if type_rng == 0 {
-            {
-                let mut snapshot = msg.write().await;
-                snapshot.r#type = "snapshot";
-                snapshot.rng_type = "ore".to_string();
-                snapshot.ore_snapshot.round = board.round_id as usize;
-                snapshot.ore_snapshot.total_round = if pov_ai.total == 0 { 1 } else { pov_ai.total };
-                snapshot.ore_snapshot.total_win = pov_ai.total_hit;
-                snapshot.ore_snapshot.win = pov_ai.win as usize;
-                snapshot.ore_snapshot.lose = pov_ai.lose as usize;
-                snapshot.ore_snapshot.win_in_row = pov_ai.win_in_row as usize;
-                snapshot.ore_snapshot.lose_in_row = pov_ai.lose_in_row as usize;
-            }
-        } else {
-            {
-                let mut snapshot = msg.write().await;
-                snapshot.r#type = "snapshot";
-                snapshot.rng_type = "orb".to_string();
-                snapshot.orb_snapshot.round = board.round_id as usize;
-                snapshot.orb_snapshot.total_round = if pov_ai.total == 0 { 1 } else { pov_ai.total };
-                snapshot.orb_snapshot.total_win = pov_ai.total_hit;
-                snapshot.orb_snapshot.win = pov_ai.win as usize;
-                snapshot.orb_snapshot.lose = pov_ai.lose as usize;
-                snapshot.orb_snapshot.win_in_row = pov_ai.win_in_row as usize;
-                snapshot.orb_snapshot.lose_in_row = pov_ai.lose_in_row as usize;
-            }
-        }
-                
-        {
-            let snapshot = msg.read().await;
-            if let Ok(json) = serde_json::to_string(&*snapshot) {
-                let _ = handle.tx.send(json);  // broadcast ke semua client
-                info_log!("Sent predictions via WS: {:?}", msg);
-            }
-        }
 
         let mut maybe_handle: Option<tokio::task::JoinHandle<anyhow::Result<Round>>> = None;
     
@@ -834,8 +831,16 @@ async fn update_loop_single(connection: Arc<RpcClient>, type_rng: usize, mut pov
             }
     
             let preds = pov_ai.preds.clone();
+            
+            let accuracy = pov_ai.total_hit as f64 / pov_ai.total as f64;
 
-            let amount = if pov_ai.lose > 1 { 10_000 * 10u64.pow(pov_ai.lose) } else { 10_000 };
+            info_log!("{} Accuracy: {}", rng_log, accuracy);
+
+            let mut amount = 10_000 * 10u64.pow(pov_ai.lose);
+            if accuracy < 0.8 && list_lose_in_row.contains_key(&3) && trigger_lose {
+                amount = if pov_ai.lose > 1 { 10_000 * 10u64.pow(pov_ai.lose -1) } else { 10_000 };
+            }
+            amount = if pov_ai.total >= LIMIT && pov_ai.lose > 0 { 10_000 * 10u64.pow(pov_ai.lose - 1) } else { amount };
             if pov_ai.total < LIMIT || pov_ai.lose > 0 {
                 if type_rng == 0 {
                     for file in &files {
@@ -875,10 +880,12 @@ async fn update_loop_single(connection: Arc<RpcClient>, type_rng: usize, mut pov
             }
             
             let conn = Arc::clone(&connection);
+            let msg_clone = msg.clone();
+            let handle_clone = handle.clone();
             
             let round_key = if type_rng == 0 { round_pda_ore(board.round_id).0 } else { round_pda_orb(board.round_id).0 };
             maybe_handle = Some(tokio::spawn(async move {
-                wait_for_round_rng(conn, round_key, if type_rng == 0 { ore_log() } else { orb_log() }).await
+                wait_for_round_rng(conn, round_key, msg_clone, if type_rng == 0 { ore_log() } else { orb_log() },  handle_clone).await
             }));
         }
             
@@ -901,6 +908,10 @@ async fn update_loop_single(connection: Arc<RpcClient>, type_rng: usize, mut pov
         
                         let last_window: Vec<usize> = pov_ai.buffer.iter().cloned().collect();
                         if hit_pred {
+                            trigger_lose = false;
+                            if pov_ai.lose > 0 {
+                                list_lose_in_row.entry(pov_ai.lose).and_modify(|c| *c += 1).or_insert(1);
+                            }
                             pov_ai.win += 1;
                             if pov_ai.win >= pov_ai.win_in_row {
                                 pov_ai.win_in_row = pov_ai.win;
@@ -911,6 +922,7 @@ async fn update_loop_single(connection: Arc<RpcClient>, type_rng: usize, mut pov
                             pov_ai.lose = 0;
                             online_update_emission(&mut pov_ai.hmm_model, &last_window, winning_square, 0.01);
                         } else {
+                            trigger_lose = true;
                             if pov_ai.win >= pov_ai.win_in_row {
                                 pov_ai.win_in_row = pov_ai.win;
                             }
@@ -962,6 +974,18 @@ async fn update_loop_single(connection: Arc<RpcClient>, type_rng: usize, mut pov
                             if let Ok(json) = serde_json::to_string(&*snapshot) {
                                 let _ = handle.tx.send(json);  // broadcast ke semua client
                                 info_log!("Sent predictions via WS: {:?}", msg);
+                            }
+                        }
+
+                        {
+                            let list_lose_in_row_clone = list_lose_in_row.clone();
+                            let lost_in_row = LostInRowRound {
+                                r#type: "lost_in_row",
+                                list_lose_in_row: list_lose_in_row_clone
+                            };
+                            if let Ok(json) = serde_json::to_string(&lost_in_row) {
+                                let _ = handle.tx.send(json);  // broadcast ke semua client
+                                info_log!("Sent lose in row: {:?}", msg);
                             }
                         }
         

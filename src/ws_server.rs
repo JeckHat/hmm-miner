@@ -7,7 +7,7 @@ use axum::{
 };
 use futures::{StreamExt, SinkExt};
 use serde::Serialize;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 use tokio::sync::{RwLock, broadcast};
 
 use crate::{info_log, warn_log};
@@ -33,6 +33,12 @@ pub struct PoVAISnapShot {
     pub win_in_row: usize,
     pub lose_in_row: usize,
     pub winning_square: usize
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LostInRowRound {
+    pub r#type: &'static str,
+    pub list_lose_in_row: HashMap<u32, u32>
 }
 
 impl PoVAISnapShot {
