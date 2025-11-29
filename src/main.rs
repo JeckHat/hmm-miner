@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use colored::{Colorize, CustomColor};
 use clap::Parser;
 
-use crate::{utils::read_filenames, worker::{run_multiple, run_single}};
+use crate::worker::{run_multiple, run_single};
 
 pub const ORE_LOG: &str = "[ORE]";
 pub const ORB_LOG: &str = "[ORB]";
@@ -25,7 +25,7 @@ pub fn orb_log() -> colored::ColoredString {
 }
 
 #[derive(Parser, Debug)]
-struct Args {
+pub struct Args {
     #[arg(long)]
     paths: PathBuf,
 
@@ -34,6 +34,9 @@ struct Args {
 
     #[arg(long)]
     orb: bool,
+
+    #[arg(long, value_parser = clap::value_parser!(u8).range(1..=25))]
+    tiles: u8,
 }
 
 #[tokio::main]
@@ -41,16 +44,12 @@ async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().expect("Failed to load env");
 
     let args = Args::parse();
-
-    let files = read_filenames(&args.paths);
-    info_log!("Loaded {} miners", files.len());
-
     if args.orb && args.ore {
-        run_multiple(files).await?;
+        run_multiple().await?;
     } else if args.ore {
-        run_single(files, 0).await?;
+        run_single(0).await?;
     } else {
-        run_single(files, 1).await?;
+        run_single(1).await?;
     }
 
     Ok(())

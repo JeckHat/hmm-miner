@@ -4,8 +4,9 @@ use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::commitment_config::{CommitmentConfig, CommitmentLevel};
 use steel::{AccountDeserialize, Pubkey};
 use tokio::sync::{RwLock, broadcast};
+use clap::Parser;
 
-use crate::{error_log, hmm::{HMM, PoVAI, online_update_emission, predict_next_from_hmm, top_k_from_probs, train_hmm}, info_log, orb::{self, board_pda_orb, round_pda_orb}, orb_log, ore::{board_pda_ore, round_pda_ore}, ore_log, rpc::{DeployOutcome, try_checkpoint_and_deploy_orb, try_checkpoint_and_deploy_ore, try_claim_sol_orb, try_claim_sol_ore}, warn_log, ws_server::{self, LostInRowRound, PoVAISnapShot, ServerSnapshot, WsServerHandle, build_router}};
+use crate::{Args, error_log, hmm::{HMM, PoVAI, online_update_emission, predict_next_from_hmm, top_k_from_probs, train_hmm}, info_log, orb::{self, board_pda_orb, round_pda_orb}, orb_log, ore::{board_pda_ore, round_pda_ore}, ore_log, rpc::{DeployOutcome, try_checkpoint_and_deploy_orb, try_checkpoint_and_deploy_ore, try_claim_sol_orb, try_claim_sol_ore}, utils::read_filenames, warn_log, ws_server::{self, InRowRound, PoVAISnapShot, ServerSnapshot, WsServerHandle, build_router}};
 
 const WINDOW: usize = 50usize;
 const N_STATES: usize = 8usize;
@@ -17,9 +18,7 @@ const LIMIT: usize = 20usize;
 pub const ORE_LOG: &str = "[ORE]";
 pub const ORB_LOG: &str = "[ORB]";
 
-pub async fn run_multiple(files: Vec<String>) -> anyhow::Result<()> {
-
-    info_log!("Loaded {} miners", files.len());
+pub async fn run_multiple() -> anyhow::Result<()> {
 
     let (tx, _rx) = broadcast::channel::<String>(200);
     let snapshot: Arc<RwLock<Option<ServerSnapshot>>> =
@@ -152,7 +151,7 @@ pub async fn run_multiple(files: Vec<String>) -> anyhow::Result<()> {
     let ws_clone = ws_handle.clone();
 
     tokio::spawn(async move {
-        update_loop(conn_clone, ore_ai, orb_ai, msg_clone, ws_clone, files).await;
+        update_loop(conn_clone, ore_ai, orb_ai, msg_clone, ws_clone).await;
     });
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
@@ -167,7 +166,7 @@ pub async fn run_multiple(files: Vec<String>) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn update_loop(connection: Arc<RpcClient>, mut ore_ai: PoVAI, mut orb_ai: PoVAI, msg: Arc<RwLock<ServerSnapshot>>, handle: WsServerHandle, files: Vec<String>) {
+async fn update_loop(connection: Arc<RpcClient>, mut ore_ai: PoVAI, mut orb_ai: PoVAI, msg: Arc<RwLock<ServerSnapshot>>, handle: WsServerHandle) {
     info_log!("Running...");
 
     let mut last_round_ore: Option<u64> = None;
@@ -184,6 +183,10 @@ async fn update_loop(connection: Arc<RpcClient>, mut ore_ai: PoVAI, mut orb_ai: 
 
     loop {
         tokio::time::sleep(Duration::from_secs(1)).await;
+
+        let args = Args::parse();
+        let files = read_filenames(&args.paths);
+        info_log!("Loaded {} miners", files.len());
 
         let accounts_res = connection
             .get_multiple_accounts(&[board_pda_ore().0, board_pda_orb().0])
@@ -612,9 +615,7 @@ async fn wait_for_round_rng(
     }
 }
 
-pub async fn run_single(files: Vec<String>, type_rng: usize) -> anyhow::Result<()> {
-
-    info_log!("Loaded {} miners", files.len());
+pub async fn run_single(type_rng: usize) -> anyhow::Result<()> {
 
     let (tx, _rx) = broadcast::channel::<String>(200);
     let snapshot: Arc<RwLock<Option<ServerSnapshot>>> =
@@ -698,7 +699,7 @@ pub async fn run_single(files: Vec<String>, type_rng: usize) -> anyhow::Result<(
     let ws_clone = ws_handle.clone();
 
     tokio::spawn(async move {
-        update_loop_single(conn_clone, type_rng, pov_ai, msg_clone, ws_clone, files).await;
+        update_loop_single(conn_clone, type_rng, pov_ai, msg_clone, ws_clone).await;
     });
 
     let addr = SocketAddr::from(([127, 0, 0, 1], if type_rng == 0 { 3000 } else { 3105 } ));
@@ -713,7 +714,7 @@ pub async fn run_single(files: Vec<String>, type_rng: usize) -> anyhow::Result<(
     Ok(())
 }
 
-async fn update_loop_single(connection: Arc<RpcClient>, type_rng: usize, mut pov_ai: PoVAI, msg: Arc<RwLock<ServerSnapshot>>, handle: WsServerHandle, files: Vec<String>) {  
+async fn update_loop_single(connection: Arc<RpcClient>, type_rng: usize, mut pov_ai: PoVAI, msg: Arc<RwLock<ServerSnapshot>>, handle: WsServerHandle) {  
     let rng_log = if type_rng == 0 { ore_log() } else { orb_log() };
     info_log!("Running...");
 
@@ -724,11 +725,17 @@ async fn update_loop_single(connection: Arc<RpcClient>, type_rng: usize, mut pov
     pov_ai.hmm_model = train_hmm(&pov_ai.history, N_STATES, N_ITER);
     info_log!("{} Initial HMM trained on {} observations.", rng_log, &pov_ai.history.len());
     
+    let mut list_win_in_row: HashMap<u32, u32> = HashMap::new();
     let mut list_lose_in_row: HashMap<u32, u32> = HashMap::new();
-    let mut trigger_lose = false;
+    let mut is_lose = false;
 
     loop {
         tokio::time::sleep(Duration::from_secs(1)).await;
+
+        let args = Args::parse();
+
+        let files = read_filenames(&args.paths);
+        info_log!("Loaded {} miners", files.len());
 
         let board_adr = if type_rng == 0 { &board_pda_ore().0 } else { &board_pda_orb().0 };
         
@@ -832,16 +839,27 @@ async fn update_loop_single(connection: Arc<RpcClient>, type_rng: usize, mut pov
     
             let preds = pov_ai.preds.clone();
             
-            let accuracy = pov_ai.total_hit as f64 / pov_ai.total as f64;
+            let accuracy: f64 = if pov_ai.total == 0 {
+                0.0
+            } else {
+                pov_ai.total_hit as f64 / pov_ai.total as f64
+            };
 
             info_log!("{} Accuracy: {}", rng_log, accuracy);
 
-            let mut amount = 10_000 * 10u64.pow(pov_ai.lose);
-            if accuracy < 0.8 && list_lose_in_row.contains_key(&3) && trigger_lose {
-                amount = if pov_ai.lose > 1 { 10_000 * 10u64.pow(pov_ai.lose -1) } else { 10_000 };
+            // let mut amount = 10_000 * 10u64.pow(pov_ai.lose);
+            let mut amount = if pov_ai.lose > 1 { 10_000 * 10u64.pow(pov_ai.lose -1) } else { 10_000 };
+            // if (accuracy < 0.75 || pov_ai.lose_in_row > 1) && !trigger_lose {
+            //     amount = if pov_ai.lose > 1 { 10_000 * 10u64.pow(pov_ai.lose -1) } else if pov_ai.lose == 1 { 20_000 } else { 10_000 } ;
+            // }
+            if accuracy >= 0.7 && pov_ai.lose_in_row <= 2 && !is_lose {
+                info_log!("{} KONDISI TERPENUHI", rng_log);
+                amount = 10_000 * 10u64.pow(pov_ai.lose);
+                // amount = if pov_ai.lose > 1 { 10_000 * 10u64.pow(pov_ai.lose -1) } else if pov_ai.lose == 1 { 20_000 } else { 10_000 } ;
             }
-            amount = if pov_ai.total >= LIMIT && pov_ai.lose > 0 { 10_000 * 10u64.pow(pov_ai.lose - 1) } else { amount };
-            if pov_ai.total < LIMIT || pov_ai.lose > 0 {
+            let flexible_limitation = if accuracy > 0.7 { pov_ai.total + 10 } else { LIMIT };
+            // amount = if pov_ai.total >= flexible_limitation && pov_ai.lose > 0 { 10_000 * 10u64.pow(pov_ai.lose - 1) } else { amount };
+            if pov_ai.total < flexible_limitation || pov_ai.lose > 0 {
                 if type_rng == 0 {
                     for file in &files {
                         match try_checkpoint_and_deploy_ore(&connection, board.round_id, amount, &preds, file).await {
@@ -908,7 +926,7 @@ async fn update_loop_single(connection: Arc<RpcClient>, type_rng: usize, mut pov
         
                         let last_window: Vec<usize> = pov_ai.buffer.iter().cloned().collect();
                         if hit_pred {
-                            trigger_lose = false;
+                            is_lose = false;
                             if pov_ai.lose > 0 {
                                 list_lose_in_row.entry(pov_ai.lose).and_modify(|c| *c += 1).or_insert(1);
                             }
@@ -922,7 +940,10 @@ async fn update_loop_single(connection: Arc<RpcClient>, type_rng: usize, mut pov
                             pov_ai.lose = 0;
                             online_update_emission(&mut pov_ai.hmm_model, &last_window, winning_square, 0.01);
                         } else {
-                            trigger_lose = true;
+                            if pov_ai.win > 0 {
+                                is_lose = true;
+                                list_win_in_row.entry(pov_ai.win).and_modify(|c| *c += 1).or_insert(1);
+                            }
                             if pov_ai.win >= pov_ai.win_in_row {
                                 pov_ai.win_in_row = pov_ai.win;
                             }
@@ -979,13 +1000,25 @@ async fn update_loop_single(connection: Arc<RpcClient>, type_rng: usize, mut pov
 
                         {
                             let list_lose_in_row_clone = list_lose_in_row.clone();
-                            let lost_in_row = LostInRowRound {
+                            let lost_in_row = InRowRound {
                                 r#type: "lost_in_row",
-                                list_lose_in_row: list_lose_in_row_clone
+                                list_in_row: list_lose_in_row_clone
                             };
                             if let Ok(json) = serde_json::to_string(&lost_in_row) {
                                 let _ = handle.tx.send(json);  // broadcast ke semua client
                                 info_log!("Sent lose in row: {:?}", msg);
+                            }
+                        }
+
+                        {
+                            let list_win_in_row_clone = list_win_in_row.clone();
+                            let win_in_row = InRowRound {
+                                r#type: "win_in_row",
+                                list_in_row: list_win_in_row_clone
+                            };
+                            if let Ok(json) = serde_json::to_string(&win_in_row) {
+                                let _ = handle.tx.send(json);  // broadcast ke semua client
+                                info_log!("Sent win in row: {:?}", msg);
                             }
                         }
         

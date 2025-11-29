@@ -36,9 +36,9 @@ pub struct PoVAISnapShot {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct LostInRowRound {
+pub struct InRowRound {
     pub r#type: &'static str,
-    pub list_lose_in_row: HashMap<u32, u32>
+    pub list_in_row: HashMap<u32, u32>
 }
 
 impl PoVAISnapShot {

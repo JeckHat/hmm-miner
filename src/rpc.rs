@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use ore_api::{sdk::claim_sol, state::Miner};
+use ore_api::state::Miner;
 use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::{commitment_config::CommitmentConfig, message::Message, signature::{Signature, read_keypair_file}, signer::Signer, transaction::Transaction};
 use steel::{AccountDeserialize, Instruction};
